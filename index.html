@@ -9,7 +9,7 @@
 <h1>3D Carton Loading System</h1>
 
 <div class="container">
-
+  
     <h2>Container Details</h2>
 
     <input type="number" id="cLength" placeholder="Container Length">
@@ -18,39 +18,42 @@
 
     <h2>Carton Details</h2>
 
-<input type="number" id="boxLength" placeholder="Carton Length">
-<input type="number" id="boxWidth" placeholder="Carton Width">
-<input type="number" id="boxHeight" placeholder="Carton Height">
-<input type="number" id="quantity" placeholder="Quantity">
+    <input type="text" id="cartonName" placeholder="Carton Name">
 
-<button onclick="addCarton()">
-    Add Carton
-</button>
+    <input type="number" id="boxLength" placeholder="Carton Length">
+    <input type="number" id="boxWidth" placeholder="Carton Width">
+    <input type="number" id="boxHeight" placeholder="Carton Height">
+    <input type="number" id="quantity" placeholder="Quantity">
 
-<br><br>
+    <button onclick="addCarton()">
+        Add Carton
+    </button>
 
-<table border="1" id="cartonTable">
-    <thead>
-        <tr>
-            <th>Length</th>
-            <th>Width</th>
-            <th>Height</th>
-            <th>Quantity</th>
-            <th>Volume</th>
-        </tr>
-    </thead>
+    <br><br>
 
-    <tbody>
-    </tbody>
-</table>
+    <table border="1" id="cartonTable">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Length</th>
+                <th>Width</th>
+                <th>Height</th>
+                <th>Quantity</th>
+                <th>Volume</th>
+            </tr>
+        </thead>
 
-<br>
+        <tbody>
+        </tbody>
+    </table>
 
-<button onclick="calculate()">
-    Optimize
-</button>
+    <br>
 
-<div id="result"></div>
+    <button onclick="calculate()">
+        Optimize
+    </button>
+
+    <div id="result"></div>
 
 </div>
 
