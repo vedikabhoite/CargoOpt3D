@@ -1,9 +1,48 @@
 let cartons = [];
 
+const cartonGeometry =
+    new THREE.BoxGeometry(
+        2,
+        2,
+        2
+    );
+
+const cartonMaterial =
+    new THREE.MeshNormalMaterial();
+
+const carton =
+    new THREE.Mesh(
+        cartonGeometry,
+        cartonMaterial
+    );
+
+placements.forEach(item => {
+
+    const box =
+        new THREE.Mesh(
+            cartonGeometry,
+            cartonMaterial
+        );
+
+    box.position.set(
+        item.x/10,
+        item.y/10,
+        item.z/10
+    );
+
+    scene.add(box);
+});
+
+
+scene.add(carton);
+
 // --------------------
 // Add Carton
 // --------------------
 function addCarton() {
+
+    let name =
+        document.getElementById("cartonName").value;
 
     let length =
         Number(document.getElementById("boxLength").value);
@@ -21,6 +60,7 @@ function addCarton() {
         length * width * height;
 
     cartons.push({
+        name,
         length,
         width,
         height,
@@ -29,10 +69,17 @@ function addCarton() {
     });
 
     displayCartons();
+
+    // Clear Inputs
+    document.getElementById("cartonName").value = "";
+    document.getElementById("boxLength").value = "";
+    document.getElementById("boxWidth").value = "";
+    document.getElementById("boxHeight").value = "";
+    document.getElementById("quantity").value = "";
 }
 
 // --------------------
-// Display Table
+// Display Cartons Table
 // --------------------
 function displayCartons() {
 
@@ -45,6 +92,7 @@ function displayCartons() {
 
         tbody.innerHTML += `
         <tr>
+            <td>${carton.name}</td>
             <td>${carton.length}</td>
             <td>${carton.width}</td>
             <td>${carton.height}</td>
@@ -56,7 +104,7 @@ function displayCartons() {
 }
 
 // --------------------
-// Calculate
+// Optimization Engine
 // --------------------
 function calculate() {
 
@@ -72,33 +120,93 @@ function calculate() {
     let containerVolume =
         cLength * cWidth * cHeight;
 
-    let usedVolume = 0;
+    let remainingSpace =
+        containerVolume;
 
     let loaded = [];
     let rejected = [];
 
+    let placements = [];
+
+    let currentX = 0;
+    let currentY = 0;
+    let currentZ = 0;
+
+    // Sort by largest volume first
     cartons.sort(
         (a, b) => b.volume - a.volume
     );
 
     cartons.forEach(carton => {
 
-        let totalVolume =
-            carton.volume * carton.quantity;
+        let maxFit =
+            Math.floor(
+                remainingSpace /
+                carton.volume
+            );
 
-        if (
-            usedVolume + totalVolume
-            <= containerVolume
-        ) {
+        let loadedQty =
+            Math.min(
+                maxFit,
+                carton.quantity
+            );
 
-            loaded.push(carton);
-            usedVolume += totalVolume;
+        let rejectedQty =
+            carton.quantity -
+            loadedQty;
 
-        } else {
+        if (loadedQty > 0) {
 
-            rejected.push(carton);
+            loaded.push({
+                name: carton.name,
+                length: carton.length,
+                width: carton.width,
+                height: carton.height,
+                quantity: loadedQty
+            });
+
+            // Generate placement coordinates
+            for (let i = 0; i < loadedQty; i++) {
+
+                placements.push({
+                    name: carton.name,
+                    x: currentX,
+                    y: currentY,
+                    z: currentZ
+                });
+
+                currentX += carton.length;
+
+                if (currentX + carton.length > cLength) {
+                    currentX = 0;
+                    currentY += carton.width;
+                }
+
+                if (currentY + carton.width > cWidth) {
+                    currentY = 0;
+                    currentZ += carton.height;
+                }
+            }
+
+            remainingSpace -=
+                loadedQty * carton.volume;
+        }
+
+        if (rejectedQty > 0) {
+
+            rejected.push({
+                name: carton.name,
+                length: carton.length,
+                width: carton.width,
+                height: carton.height,
+                quantity: rejectedQty
+            });
         }
     });
+
+    let usedVolume =
+        containerVolume -
+        remainingSpace;
 
     let utilization =
         (usedVolume / containerVolume) * 100;
@@ -107,44 +215,210 @@ function calculate() {
 
         <h2>Optimization Results</h2>
 
-        Container Volume:
-        ${containerVolume}
+        <p>
+            <strong>Container Volume:</strong>
+            ${containerVolume}
+        </p>
 
-        <br><br>
+        <p>
+            <strong>Used Volume:</strong>
+            ${usedVolume}
+        </p>
 
-        Used Volume:
-        ${usedVolume}
+        <p>
+            <strong>Free Space:</strong>
+            ${remainingSpace}
+        </p>
 
-        <br><br>
+        <p>
+            <strong>Utilization:</strong>
+            ${utilization.toFixed(2)}%
+        </p>
 
-        Free Space:
-        ${containerVolume - usedVolume}
-
-        <br><br>
-
-        Utilization:
-        ${utilization.toFixed(2)}%
-
-        <br><br>
+        <hr>
 
         <h3>Loaded Cartons</h3>
 
-        ${loaded.map(carton => `
-            ${carton.length} ×
-            ${carton.width} ×
-            ${carton.height}
-            Qty: ${carton.quantity}
-            <br>
-        `).join("")}
+        ${
+            loaded.length > 0
+            ?
+            loaded.map(carton => `
+                <p>
+                    <strong>${carton.name}</strong><br>
+                    Size:
+                    ${carton.length} x
+                    ${carton.width} x
+                    ${carton.height}<br>
+                    Loaded Qty:
+                    ${carton.quantity}
+                </p>
+            `).join("")
+            :
+            "<p>None</p>"
+        }
+
+        <hr>
 
         <h3>Rejected Cartons</h3>
 
-        ${rejected.map(carton => `
-            ${carton.length} x
-            ${carton.width} x
-            ${carton.height}
-            Qty: ${carton.quantity}
-            <br>
-        `).join("")}
+        ${
+            rejected.length > 0
+            ?
+            rejected.map(carton => `
+                <p>
+                    <strong>${carton.name}</strong><br>
+                    Size:
+                    ${carton.length} x
+                    ${carton.width} x
+                    ${carton.height}<br>
+                    Rejected Qty:
+                    ${carton.quantity}
+                </p>
+            `).join("")
+            :
+            "<p>None</p>"
+        }
+
+        <hr>
+
+        <h3>Placement Coordinates</h3>
+
+        ${
+            placements.length > 0
+            ?
+            placements.map(item => `
+                ${item.name}
+                → (${item.x}, ${item.y}, ${item.z})
+                <br>
+            `).join("")
+            :
+            "<p>No placements generated</p>"
+        }
     `;
 }
+
+    // Sort by largest volume first
+    cartons.sort(
+        (a, b) => b.volume - a.volume
+    );
+
+    cartons.forEach(carton => {
+
+        let maxFit =
+            Math.floor(
+                remainingSpace /
+                carton.volume
+            );
+
+        let loadedQty =
+            Math.min(
+                maxFit,
+                carton.quantity
+            );
+
+        let rejectedQty =
+            carton.quantity -
+            loadedQty;
+
+        if (loadedQty > 0) {
+
+            loaded.push({
+                name: carton.name,
+                length: carton.length,
+                width: carton.width,
+                height: carton.height,
+                quantity: loadedQty
+            });
+
+            remainingSpace -=
+                loadedQty *
+                carton.volume;
+        }
+
+        if (rejectedQty > 0) {
+
+            rejected.push({
+                name: carton.name,
+                length: carton.length,
+                width: carton.width,
+                height: carton.height,
+                quantity: rejectedQty
+            });
+        }
+    });
+
+    let usedVolume =
+        containerVolume -
+        remainingSpace;
+
+    let utilization =
+        (usedVolume / containerVolume) * 100;
+
+    document.getElementById("result").innerHTML = `
+
+        <h2>Optimization Results</h2>
+
+        <p>
+            <strong>Container Volume:</strong>
+            ${containerVolume}
+        </p>
+
+        <p>
+            <strong>Used Volume:</strong>
+            ${usedVolume}
+        </p>
+
+        <p>
+            <strong>Free Space:</strong>
+            ${remainingSpace}
+        </p>
+
+        <p>
+            <strong>Utilization:</strong>
+            ${utilization.toFixed(2)}%
+        </p>
+
+        <hr>
+
+        <h3>Loaded Cartons</h3>
+
+        ${
+            loaded.length > 0
+            ?
+            loaded.map(carton => `
+                <p>
+                    <strong>${carton.name}</strong><br>
+                    Size:
+                    ${carton.length} x
+                    ${carton.width} x
+                    ${carton.height}<br>
+                    Loaded Qty:
+                    ${carton.quantity}
+                </p>
+            `).join("")
+            :
+            "<p>None</p>"
+        }
+
+        <hr>
+
+        <h3>Rejected Cartons</h3>
+
+        ${
+            rejected.length > 0
+            ?
+            rejected.map(carton => `
+                <p>
+                    <strong>${carton.name}</strong><br>
+                    Size:
+                    ${carton.length} x
+                    ${carton.width} x
+                    ${carton.height}<br>
+                    Rejected Qty:
+                    ${carton.quantity}
+                </p>
+            `).join("")
+            :
+            "<p>None</p>"
+        }
+    `;
