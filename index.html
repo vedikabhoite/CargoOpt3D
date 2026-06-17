@@ -18,14 +18,39 @@
 
     <h2>Carton Details</h2>
 
-    <input type="number" id="boxLength" placeholder="Carton Length">
-    <input type="number" id="boxWidth" placeholder="Carton Width">
-    <input type="number" id="boxHeight" placeholder="Carton Height">
-    <input type="number" id="quantity" placeholder="Quantity">
+<input type="number" id="boxLength" placeholder="Carton Length">
+<input type="number" id="boxWidth" placeholder="Carton Width">
+<input type="number" id="boxHeight" placeholder="Carton Height">
+<input type="number" id="quantity" placeholder="Quantity">
 
-    <button onclick="calculate()">Calculate</button>
+<button onclick="addCarton()">
+    Add Carton
+</button>
 
-    <div id="result"></div>
+<br><br>
+
+<table border="1" id="cartonTable">
+    <thead>
+        <tr>
+            <th>Length</th>
+            <th>Width</th>
+            <th>Height</th>
+            <th>Quantity</th>
+            <th>Volume</th>
+        </tr>
+    </thead>
+
+    <tbody>
+    </tbody>
+</table>
+
+<br>
+
+<button onclick="calculate()">
+    Optimize
+</button>
+
+<div id="result"></div>
 
 </div>
 
