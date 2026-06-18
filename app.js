@@ -1,12 +1,4 @@
-/**
- * app.js — UI Controller
- *
- * Owns: form state, carton type list, stats updates,
- * manifest table, legend panel.
- *
- * Depends on: Packer (packer.js) and Renderer (renderer.js)
- * both loaded before this file.
- */
+
 
 (function () {
   'use strict';
