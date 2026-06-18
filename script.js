@@ -1,424 +1,295 @@
-let cartons = [];
+/**
+ * app.js — UI Controller
+ *
+ * Owns: form state, carton type list, stats updates,
+ * manifest table, legend panel.
+ *
+ * Depends on: Packer (packer.js) and Renderer (renderer.js)
+ * both loaded before this file.
+ */
 
-const cartonGeometry =
-    new THREE.BoxGeometry(
-        2,
-        2,
-        2
-    );
+(function () {
+  'use strict';
 
-const cartonMaterial =
-    new THREE.MeshNormalMaterial();
+  /* ── CONSTANTS ── */
+  const COLORS = [
+    0xF59E0B, 0x2DD4BF, 0x818CF8, 0x34D399,
+    0xF472B6, 0x60A5FA, 0xFB923C, 0xA78BFA,
+    0x4ADE80, 0xFACC15, 0x38BDF8, 0xF87171,
+  ];
 
-const carton =
-    new THREE.Mesh(
-        cartonGeometry,
-        cartonMaterial
-    );
+  const PRESETS = {
+    20: [589,  234, 239, 21700],
+    40: [1203, 234, 239, 26680],
+    hc: [1203, 234, 269, 26480],
+    lt: [1360, 248, 278, 15000],
+  };
 
-placements.forEach(item => {
+  /* ── STATE ── */
+  let types    = [];   // carton type objects
+  let places   = [];   // current placement results
+  let colorIdx = 0;
 
-    const box =
-        new THREE.Mesh(
-            cartonGeometry,
-            cartonMaterial
-        );
+  /* ─────────────────────────────────────────────
+     CONTAINER PRESETS
+  ───────────────────────────────────────────── */
+  function setPreset(type, el) {
+    document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    el.classList.add('active');
+    const [l, w, h, wt] = PRESETS[type];
+    document.getElementById('cL').value    = l;
+    document.getElementById('cW').value    = w;
+    document.getElementById('cH').value    = h;
+    document.getElementById('cMaxWt').value = wt;
+  }
 
-    box.position.set(
-        item.x/10,
-        item.y/10,
-        item.z/10
-    );
+  /* ─────────────────────────────────────────────
+     ADD CARTON TYPE
+  ───────────────────────────────────────────── */
+  function addCarton() {
+    const l   = +document.getElementById('bL').value;
+    const w   = +document.getElementById('bW').value;
+    const h   = +document.getElementById('bH').value;
+    const qty = +document.getElementById('bQty').value || 1;
+    const wt  = +document.getElementById('bWt').value  || 0;
+    const sku = document.getElementById('bSKU').value.trim()
+                || `SKU-${String(types.length + 1).padStart(3, '0')}`;
+    const rot = +document.getElementById('bRot').value;
+    const fb  = document.getElementById('fb');
 
-    scene.add(box);
-});
+    if (!l || !w || !h || l <= 0 || w <= 0 || h <= 0) {
+      fb.innerHTML = '<div class="feedback fb-warn">Enter valid L, W, H (all > 0)</div>';
+      return;
+    }
 
+    const color = COLORS[colorIdx % COLORS.length];
+    colorIdx++;
+    types.push({ l, w, h, qty, wt, sku, rot, color, id: Date.now() });
 
-scene.add(carton);
-
-// --------------------
-// Add Carton
-// --------------------
-function addCarton() {
-
-    let name =
-        document.getElementById("cartonName").value;
-
-    let length =
-        Number(document.getElementById("boxLength").value);
-
-    let width =
-        Number(document.getElementById("boxWidth").value);
-
-    let height =
-        Number(document.getElementById("boxHeight").value);
-
-    let quantity =
-        Number(document.getElementById("quantity").value);
-
-    let volume =
-        length * width * height;
-
-    cartons.push({
-        name,
-        length,
-        width,
-        height,
-        quantity,
-        volume
+    fb.innerHTML = `<div class="feedback fb-ok">Added ${qty}× ${sku} (${l}×${w}×${h} cm)</div>`;
+    _renderCartonList();
+    ['bL', 'bW', 'bH', 'bQty', 'bWt', 'bSKU'].forEach(id => {
+      document.getElementById(id).value = '';
     });
+  }
 
-    displayCartons();
+  function removeType(id) {
+    types = types.filter(t => t.id !== id);
+    _renderCartonList();
+  }
 
-    // Clear Inputs
-    document.getElementById("cartonName").value = "";
-    document.getElementById("boxLength").value = "";
-    document.getElementById("boxWidth").value = "";
-    document.getElementById("boxHeight").value = "";
-    document.getElementById("quantity").value = "";
-}
+  /* ─────────────────────────────────────────────
+     RENDER CARTON LIST
+  ───────────────────────────────────────────── */
+  function _renderCartonList() {
+    const el = document.getElementById('cartonList');
+    const ctC = document.getElementById('ctC');
+    ctC.textContent = types.length ? `(${types.length})` : '';
 
-// --------------------
-// Display Cartons Table
-// --------------------
-function displayCartons() {
+    if (!types.length) {
+      el.innerHTML = '<div class="empty-note">No types added yet.</div>';
+      return;
+    }
 
-    let tbody =
-        document.querySelector("#cartonTable tbody");
+    el.innerHTML = types.map(t => {
+      const hex = '#' + t.color.toString(16).padStart(6, '0');
+      return `
+        <div class="carton-row">
+          <div class="c-swatch" style="background:${hex}"></div>
+          <div class="c-info">
+            <div class="c-name">${t.sku}</div>
+            <div class="c-meta">${t.l}×${t.w}×${t.h} cm · ${t.qty} pcs · ${t.wt}kg</div>
+          </div>
+          <button class="c-del" onclick="App.removeType(${t.id})">✕</button>
+        </div>`;
+    }).join('');
+  }
 
-    tbody.innerHTML = "";
+  /* ─────────────────────────────────────────────
+     RUN OPTIMIZATION
+  ───────────────────────────────────────────── */
+  function run() {
+    const fb = document.getElementById('fb');
 
-    cartons.forEach(carton => {
+    if (!types.length) {
+      fb.innerHTML = '<div class="feedback fb-warn">Add at least one carton type first.</div>';
+      return;
+    }
 
-        tbody.innerHTML += `
+    const cL    = +document.getElementById('cL').value;
+    const cW    = +document.getElementById('cW').value;
+    const cH    = +document.getElementById('cH').value;
+    const maxWt = +document.getElementById('cMaxWt').value || Infinity;
+
+    if (!cL || !cW || !cH) {
+      fb.innerHTML = '<div class="feedback fb-warn">Set container dimensions first.</div>';
+      return;
+    }
+
+    // Run packing algorithm
+    const result = Packer.pack(cL, cW, cH, maxWt, types);
+    places = result.placements;
+
+    // ── Update stats ──
+    const cVol   = cL * cW * cH;
+    const pVol   = places.reduce((s, p) => s + p.l * p.w * p.h, 0);
+    const util   = (pVol / cVol) * 100;
+    const totReq = types.reduce((s, t) => s + t.qty, 0);
+    const ys     = places.map(p => p.y + p.h);
+    const maxH   = ys.length ? Math.max(...ys) : 0;
+    const layers = places.length
+      ? new Set(places.map(p => Math.round(p.y))).size : 0;
+
+    _setStat('sv1', `${util.toFixed(1)}<span class="u"> %</span>`);
+    _setBar('sb1', util,
+      util > 80 ? 'var(--green)' : util > 55 ? 'var(--amber)' : 'var(--red)');
+
+    _setStat('sv2', places.length);
+    document.getElementById('ss2').textContent = `of ${totReq} requested`;
+
+    _setStat('sv3', `${result.totalWeight.toFixed(0)}<span class="u"> kg</span>`);
+    _setBar('sb3', result.totalWeight / (maxWt || result.totalWeight || 1) * 100, 'var(--indigo)');
+
+    _setStat('sv4', layers);
+    document.getElementById('ss4').textContent = `height ${maxH.toFixed(0)} cm`;
+
+    _setStat('sv5', `${(cVol / 1e6).toFixed(2)}<span class="u"> m³</span>`);
+    document.getElementById('ss5').textContent = `${(pVol / 1e6).toFixed(2)} m³ packed`;
+
+    // ── Render 3D ──
+    Renderer.buildScene({ l: cL, w: cW, h: cH }, places);
+
+    // ── Update manifest + legend ──
+    _renderManifest();
+    _renderLegend();
+
+    fb.innerHTML = '';
+  }
+
+  /* ─────────────────────────────────────────────
+     CLEAR ALL
+  ───────────────────────────────────────────── */
+  function clearAll() {
+    types = []; places = []; colorIdx = 0;
+    _renderCartonList();
+    document.getElementById('fb').innerHTML = '';
+    document.getElementById('mBody').innerHTML =
+      '<tr><td colspan="9" class="no-data">Run optimization to see placement manifest.</td></tr>';
+    document.getElementById('mBadge').textContent = '0 placements';
+    document.getElementById('legItems').innerHTML =
+      '<div style="font-size:11px;color:var(--muted2)">Run to visualize</div>';
+
+    ['sv1','sv2','sv3','sv4','sv5'].forEach(id =>
+      document.getElementById(id).innerHTML = '—'
+    );
+    document.getElementById('ss2').textContent = 'of — requested';
+    document.getElementById('ss4').textContent = 'height —';
+    document.getElementById('ss5').textContent = '— m³ packed';
+    ['sb1','sb3'].forEach(id => document.getElementById(id).style.width = '0%');
+
+    Renderer.clearScene();
+  }
+
+  /* ─────────────────────────────────────────────
+     MANIFEST TABLE
+  ───────────────────────────────────────────── */
+  function _renderManifest() {
+    document.getElementById('mBadge').textContent = `${places.length} placements`;
+
+    if (!places.length) {
+      document.getElementById('mBody').innerHTML =
+        '<tr><td colspan="9" class="no-data">No placements generated.</td></tr>';
+      return;
+    }
+
+    document.getElementById('mBody').innerHTML = places.map((p, i) => {
+      const hex     = '#' + p.item.color.toString(16).padStart(6, '0');
+      const isNative = p.l === p.item.l && p.w === p.item.w && p.h === p.item.h;
+      const vol     = (p.l * p.w * p.h / 1e6).toFixed(4);
+      return `
         <tr>
-            <td>${carton.name}</td>
-            <td>${carton.length}</td>
-            <td>${carton.width}</td>
-            <td>${carton.height}</td>
-            <td>${carton.quantity}</td>
-            <td>${carton.volume}</td>
-        </tr>
-        `;
+          <td class="mono">${i + 1}</td>
+          <td>
+            <span style="display:inline-block;width:7px;height:7px;border-radius:2px;
+              background:${hex};margin-right:5px;vertical-align:middle"></span>
+            ${p.item.sku}
+          </td>
+          <td class="mono">${p.l}×${p.w}×${p.h}</td>
+          <td class="mono">${p.x.toFixed(0)}</td>
+          <td class="mono">${p.y.toFixed(0)}</td>
+          <td class="mono">${p.z.toFixed(0)}</td>
+          <td style="color:var(--muted2)">${isNative ? 'L×W×H' : 'rotated'}</td>
+          <td class="mono">${p.item.wt}</td>
+          <td class="mono">${vol}</td>
+        </tr>`;
+    }).join('');
+  }
+
+  /* ─────────────────────────────────────────────
+     LEGEND
+  ───────────────────────────────────────────── */
+  function _renderLegend() {
+    document.getElementById('legItems').innerHTML = types.map(t => {
+      const hex = '#' + t.color.toString(16).padStart(6, '0');
+      return `
+        <div class="leg-item">
+          <div class="leg-swatch" style="background:${hex}"></div>
+          <span>${t.sku} ×${t.qty}</span>
+        </div>`;
+    }).join('');
+  }
+
+  /* ─────────────────────────────────────────────
+     HELPERS
+  ───────────────────────────────────────────── */
+  function _setStat(id, html) {
+    document.getElementById(id).innerHTML = html;
+  }
+  function _setBar(id, pct, color) {
+    const el = document.getElementById(id);
+    el.style.width      = Math.min(pct, 100) + '%';
+    el.style.background = color;
+  }
+
+  /* ─────────────────────────────────────────────
+     BOOT
+  ───────────────────────────────────────────── */
+  function _boot() {
+    Renderer.init();
+    Renderer.initTooltip();
+
+    // Pre-load two demo carton types
+    const demos = [
+      { bL: 60, bW: 40, bH: 30, bQty: 80, bWt: 12, bSKU: 'SKU-001', bRot: 6 },
+      { bL: 45, bW: 45, bH: 45, bQty: 40, bWt: 8,  bSKU: 'SKU-002', bRot: 6 },
+    ];
+    demos.forEach(d => {
+      Object.entries(d).forEach(([k, v]) => {
+        document.getElementById(k).value = v;
+      });
+      addCarton();
     });
-}
-
-// --------------------
-// Optimization Engine
-// --------------------
-function calculate() {
-
-    let cLength =
-        Number(document.getElementById("cLength").value);
-
-    let cWidth =
-        Number(document.getElementById("cWidth").value);
-
-    let cHeight =
-        Number(document.getElementById("cHeight").value);
-
-    let containerVolume =
-        cLength * cWidth * cHeight;
-
-    let remainingSpace =
-        containerVolume;
-
-    let loaded = [];
-    let rejected = [];
-
-    let placements = [];
-
-    let currentX = 0;
-    let currentY = 0;
-    let currentZ = 0;
-
-    // Sort by largest volume first
-    cartons.sort(
-        (a, b) => b.volume - a.volume
-    );
-
-    cartons.forEach(carton => {
-
-        let maxFit =
-            Math.floor(
-                remainingSpace /
-                carton.volume
-            );
-
-        let loadedQty =
-            Math.min(
-                maxFit,
-                carton.quantity
-            );
-
-        let rejectedQty =
-            carton.quantity -
-            loadedQty;
-
-        if (loadedQty > 0) {
-
-            loaded.push({
-                name: carton.name,
-                length: carton.length,
-                width: carton.width,
-                height: carton.height,
-                quantity: loadedQty
-            });
-
-            // Generate placement coordinates
-            for (let i = 0; i < loadedQty; i++) {
-
-                placements.push({
-                    name: carton.name,
-                    x: currentX,
-                    y: currentY,
-                    z: currentZ
-                });
-
-                currentX += carton.length;
-
-                if (currentX + carton.length > cLength) {
-                    currentX = 0;
-                    currentY += carton.width;
-                }
-
-                if (currentY + carton.width > cWidth) {
-                    currentY = 0;
-                    currentZ += carton.height;
-                }
-            }
-
-            remainingSpace -=
-                loadedQty * carton.volume;
-        }
-
-        if (rejectedQty > 0) {
-
-            rejected.push({
-                name: carton.name,
-                length: carton.length,
-                width: carton.width,
-                height: carton.height,
-                quantity: rejectedQty
-            });
-        }
-    });
-
-    let usedVolume =
-        containerVolume -
-        remainingSpace;
-
-    let utilization =
-        (usedVolume / containerVolume) * 100;
-
-    document.getElementById("result").innerHTML = `
-
-        <h2>Optimization Results</h2>
-
-        <p>
-            <strong>Container Volume:</strong>
-            ${containerVolume}
-        </p>
-
-        <p>
-            <strong>Used Volume:</strong>
-            ${usedVolume}
-        </p>
-
-        <p>
-            <strong>Free Space:</strong>
-            ${remainingSpace}
-        </p>
-
-        <p>
-            <strong>Utilization:</strong>
-            ${utilization.toFixed(2)}%
-        </p>
-
-        <hr>
-
-        <h3>Loaded Cartons</h3>
-
-        ${
-            loaded.length > 0
-            ?
-            loaded.map(carton => `
-                <p>
-                    <strong>${carton.name}</strong><br>
-                    Size:
-                    ${carton.length} x
-                    ${carton.width} x
-                    ${carton.height}<br>
-                    Loaded Qty:
-                    ${carton.quantity}
-                </p>
-            `).join("")
-            :
-            "<p>None</p>"
-        }
-
-        <hr>
-
-        <h3>Rejected Cartons</h3>
-
-        ${
-            rejected.length > 0
-            ?
-            rejected.map(carton => `
-                <p>
-                    <strong>${carton.name}</strong><br>
-                    Size:
-                    ${carton.length} x
-                    ${carton.width} x
-                    ${carton.height}<br>
-                    Rejected Qty:
-                    ${carton.quantity}
-                </p>
-            `).join("")
-            :
-            "<p>None</p>"
-        }
-
-        <hr>
-
-        <h3>Placement Coordinates</h3>
-
-        ${
-            placements.length > 0
-            ?
-            placements.map(item => `
-                ${item.name}
-                → (${item.x}, ${item.y}, ${item.z})
-                <br>
-            `).join("")
-            :
-            "<p>No placements generated</p>"
-        }
-    `;
-}
-
-    // Sort by largest volume first
-    cartons.sort(
-        (a, b) => b.volume - a.volume
-    );
-
-    cartons.forEach(carton => {
-
-        let maxFit =
-            Math.floor(
-                remainingSpace /
-                carton.volume
-            );
-
-        let loadedQty =
-            Math.min(
-                maxFit,
-                carton.quantity
-            );
-
-        let rejectedQty =
-            carton.quantity -
-            loadedQty;
-
-        if (loadedQty > 0) {
-
-            loaded.push({
-                name: carton.name,
-                length: carton.length,
-                width: carton.width,
-                height: carton.height,
-                quantity: loadedQty
-            });
-
-            remainingSpace -=
-                loadedQty *
-                carton.volume;
-        }
-
-        if (rejectedQty > 0) {
-
-            rejected.push({
-                name: carton.name,
-                length: carton.length,
-                width: carton.width,
-                height: carton.height,
-                quantity: rejectedQty
-            });
-        }
-    });
-
-    let usedVolume =
-        containerVolume -
-        remainingSpace;
-
-    let utilization =
-        (usedVolume / containerVolume) * 100;
-
-    document.getElementById("result").innerHTML = `
-
-        <h2>Optimization Results</h2>
-
-        <p>
-            <strong>Container Volume:</strong>
-            ${containerVolume}
-        </p>
-
-        <p>
-            <strong>Used Volume:</strong>
-            ${usedVolume}
-        </p>
-
-        <p>
-            <strong>Free Space:</strong>
-            ${remainingSpace}
-        </p>
-
-        <p>
-            <strong>Utilization:</strong>
-            ${utilization.toFixed(2)}%
-        </p>
-
-        <hr>
-
-        <h3>Loaded Cartons</h3>
-
-        ${
-            loaded.length > 0
-            ?
-            loaded.map(carton => `
-                <p>
-                    <strong>${carton.name}</strong><br>
-                    Size:
-                    ${carton.length} x
-                    ${carton.width} x
-                    ${carton.height}<br>
-                    Loaded Qty:
-                    ${carton.quantity}
-                </p>
-            `).join("")
-            :
-            "<p>None</p>"
-        }
-
-        <hr>
-
-        <h3>Rejected Cartons</h3>
-
-        ${
-            rejected.length > 0
-            ?
-            rejected.map(carton => `
-                <p>
-                    <strong>${carton.name}</strong><br>
-                    Size:
-                    ${carton.length} x
-                    ${carton.width} x
-                    ${carton.height}<br>
-                    Rejected Qty:
-                    ${carton.quantity}
-                </p>
-            `).join("")
-            :
-            "<p>None</p>"
-        }
-    `;
+    document.getElementById('fb').innerHTML = '';
+  }
+
+  // Run after DOM is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _boot);
+  } else {
+    _boot();
+  }
+
+  // Public API — called from inline onclick handlers in HTML
+  window.App = {
+    setPreset,
+    addCarton,
+    removeType,
+    run,
+    clearAll,
+    // camera + view controls delegated to Renderer
+    cam:             p  => Renderer.setCameraPreset(p),
+    toggleExplode:   ()  => Renderer.toggleExplode(),
+    toggleWire:      ()  => Renderer.toggleWireframe(),
+  };
+
+})();
