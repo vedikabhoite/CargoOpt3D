@@ -1,63 +1,246 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Carton Loading System</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CargoOpt3D — Industrial Cargo Loading Simulator</title>
+
+  <!--
+    File structure
+    ──────────────
+    index.html   ← you are here (markup + load order)
+    styles.css   ← all design tokens + component styles
+    packer.js    ← 3D bin-packing algorithm  (no DOM/Three deps)
+    renderer.js  ← Three.js scene, orbit, raycaster (needs Three.js)
+    app.js       ← UI controller (needs Packer + Renderer)
+
+    Load order:  three.js → packer.js → renderer.js → app.js
+  -->
+
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-<h1>3D Carton Loading System</h1>
+<!-- ── TOPBAR ── -->
+<header class="topbar">
+  <div class="tb-brand">
+    <!-- Inline cargo-container icon (amber, ~22px) -->
+    <svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <rect x="1" y="7" width="20" height="14" rx="2" fill="none" stroke="#F59E0B" stroke-width="1.2"/>
+      <path d="M1 10h20" stroke="#F59E0B" stroke-width="1.2" stroke-dasharray="2 2"/>
+      <rect x="5" y="10" width="4" height="11" fill="rgba(245,158,11,0.25)" stroke="#F59E0B" stroke-width="0.8"/>
+      <rect x="10" y="10" width="6" height="8"  fill="rgba(245,158,11,0.15)" stroke="#F59E0B" stroke-width="0.8"/>
+      <path d="M6 4l4-3 5 3" stroke="#94A3B8" stroke-width="1" fill="none"/>
+    </svg>
+    <span class="brand-wordmark"><em>Cargo</em>Opt3D</span>
+  </div>
 
-<div class="container">
-  
-    <h2>Container Details</h2>
+  <div class="tb-crumb">
+    <span>Optimizer</span>
+    <span style="color:var(--rim2)">›</span>
+    <span>3D Guillotine FFD</span>
+  </div>
 
-    <input type="number" id="cLength" placeholder="Container Length">
-    <input type="number" id="cWidth" placeholder="Container Width">
-    <input type="number" id="cHeight" placeholder="Container Height">
+  <div class="tb-pill">INDUSTRIAL</div>
 
-    <h2>Carton Details</h2>
+  <div class="tb-right">
+    <div class="tb-stat">
+      <div class="dot"></div>
+      <strong>Engine ready</strong>
+    </div>
+  </div>
+</header>
 
-    <input type="text" id="cartonName" placeholder="Carton Name">
+<!-- ── MAIN LAYOUT ── -->
+<div class="main">
 
-    <input type="number" id="boxLength" placeholder="Carton Length">
-    <input type="number" id="boxWidth" placeholder="Carton Width">
-    <input type="number" id="boxHeight" placeholder="Carton Height">
-    <input type="number" id="quantity" placeholder="Quantity">
+  <!-- ── LEFT PANEL ── -->
+  <aside class="panel">
+    <div class="panel-inner">
 
-    <button onclick="addCarton()">
-        Add Carton
-    </button>
+      <!-- Container config -->
+      <div class="p-section">
+        <div class="section-eyebrow">Container</div>
+        <div class="preset-chips">
+          <button class="chip active" onclick="App.setPreset(20, this)">20ft ISO</button>
+          <button class="chip"        onclick="App.setPreset(40, this)">40ft ISO</button>
+          <button class="chip"        onclick="App.setPreset('hc', this)">40ft HC</button>
+          <button class="chip"        onclick="App.setPreset('lt', this)">LTL Truck</button>
+        </div>
+        <div class="three-col">
+          <div class="fg"><label>Length cm</label><input type="number" id="cL" value="589" min="1"></div>
+          <div class="fg"><label>Width cm</label><input  type="number" id="cW" value="234" min="1"></div>
+          <div class="fg"><label>Height cm</label><input type="number" id="cH" value="239" min="1"></div>
+        </div>
+        <div class="fg">
+          <label>Max payload kg</label>
+          <input type="number" id="cMaxWt" value="21700" min="1">
+        </div>
+      </div>
 
-    <br><br>
+      <!-- Add carton type -->
+      <div class="p-section">
+        <div class="section-eyebrow">Add carton type</div>
+        <div class="three-col">
+          <div class="fg"><label>L cm</label><input type="number" id="bL" placeholder="60" min="1"></div>
+          <div class="fg"><label>W cm</label><input type="number" id="bW" placeholder="40" min="1"></div>
+          <div class="fg"><label>H cm</label><input type="number" id="bH" placeholder="30" min="1"></div>
+        </div>
+        <div class="three-col">
+          <div class="fg"><label>Qty</label><input type="number" id="bQty" placeholder="50" min="1"></div>
+          <div class="fg"><label>kg/box</label><input type="number" id="bWt" placeholder="12" min="0" step="0.1"></div>
+          <div class="fg"><label>SKU</label><input type="text" id="bSKU" placeholder="SKU-001"></div>
+        </div>
+        <div class="fg fg-select">
+          <label>Rotation</label>
+          <select id="bRot">
+            <option value="6">All 6 orientations</option>
+            <option value="2">Keep Z-up (2 rot.)</option>
+            <option value="1">Fixed — no rotation</option>
+          </select>
+        </div>
+        <button class="btn btn-add" onclick="App.addCarton()">+ Add carton type</button>
+        <div id="fb"></div>
+      </div>
 
-    <table border="1" id="cartonTable">
-        <thead>
+      <!-- Carton type list -->
+      <div class="p-section">
+        <div class="section-eyebrow">
+          Carton types
+          <span id="ctC" style="color:var(--muted);letter-spacing:0;text-transform:none;font-weight:400"></span>
+        </div>
+        <div class="carton-stack" id="cartonList">
+          <div class="empty-note">No types added yet.</div>
+        </div>
+      </div>
+
+      <!-- Run / Clear -->
+      <div class="p-section">
+        <button class="btn btn-run"   onclick="App.run()">▶ Run optimization</button>
+        <button class="btn btn-clear" onclick="App.clearAll()">✕ Clear all</button>
+      </div>
+
+    </div>
+  </aside>
+
+  <!-- ── RIGHT PANE ── -->
+  <div class="right">
+
+    <!-- Stats row -->
+    <div class="statsrow">
+      <div class="scard">
+        <div class="scard-accent" style="background:var(--amber)"></div>
+        <div class="scard-label">Space used</div>
+        <div class="scard-val" id="sv1">—<span class="u"> %</span></div>
+        <div class="scard-bar"><div class="scard-bar-fill" id="sb1" style="width:0%;background:var(--amber)"></div></div>
+      </div>
+      <div class="scard">
+        <div class="scard-accent" style="background:var(--teal)"></div>
+        <div class="scard-label">Boxes loaded</div>
+        <div class="scard-val" id="sv2">—</div>
+        <div class="scard-sub" id="ss2">of — requested</div>
+      </div>
+      <div class="scard">
+        <div class="scard-accent" style="background:var(--indigo)"></div>
+        <div class="scard-label">Total weight</div>
+        <div class="scard-val" id="sv3">—<span class="u"> kg</span></div>
+        <div class="scard-bar"><div class="scard-bar-fill" id="sb3" style="width:0%;background:var(--indigo)"></div></div>
+      </div>
+      <div class="scard">
+        <div class="scard-accent" style="background:var(--green)"></div>
+        <div class="scard-label">Stack layers</div>
+        <div class="scard-val" id="sv4">—</div>
+        <div class="scard-sub" id="ss4">height —</div>
+      </div>
+      <div class="scard" style="border-right:none">
+        <div class="scard-accent" style="background:var(--muted2)"></div>
+        <div class="scard-label">Container vol.</div>
+        <div class="scard-val" id="sv5">—<span class="u"> m³</span></div>
+        <div class="scard-sub" id="ss5">— m³ packed</div>
+      </div>
+    </div>
+
+    <!-- 3D viewport -->
+    <div class="viewport" id="vp">
+      <canvas id="canvas3d"></canvas>
+
+      <!-- Camera / view controls -->
+      <div class="vp-controls">
+        <button class="vp-btn on" id="vpPersp" onclick="App.cam('persp')">Perspective</button>
+        <button class="vp-btn"    id="vpFront" onclick="App.cam('front')">Front</button>
+        <button class="vp-btn"    id="vpTop"   onclick="App.cam('top')">Top</button>
+        <button class="vp-btn"    id="vpSide"  onclick="App.cam('side')">Side</button>
+        <button class="vp-btn"    id="vpEx"    onclick="App.toggleExplode()">Explode</button>
+        <button class="vp-btn"    id="vpWf"    onclick="App.toggleWire()">Wireframe</button>
+      </div>
+
+      <!-- Hover tooltip -->
+      <div class="tt" id="tt">
+        <div class="tt-head">
+          <div class="tt-swatch" id="ttS"></div>
+          <span id="ttT">Box</span>
+        </div>
+        <div class="tt-row"><span>Size</span>    <span id="ttSz" class="mono">—</span></div>
+        <div class="tt-row"><span>Position</span><span id="ttP"  class="mono">—</span></div>
+        <div class="tt-row"><span>Weight</span>  <span id="ttW"  class="mono">—</span></div>
+        <div class="tt-row"><span>Box #</span>   <span id="ttI"  class="mono">—</span></div>
+      </div>
+
+      <!-- Carton legend -->
+      <div class="vp-legend" id="leg">
+        <div class="vp-legend-title">Carton legend</div>
+        <div id="legItems">
+          <div style="font-size:11px;color:var(--muted2)">Run to visualize</div>
+        </div>
+      </div>
+
+      <div class="vp-hint">Drag · Scroll to zoom · Right-drag to pan · Hover for details</div>
+    </div>
+
+    <!-- Placement manifest -->
+    <div class="manifest">
+      <div class="manifest-hdr">
+        <h3>Placement manifest</h3>
+        <span class="m-badge" id="mBadge">0 placements</span>
+      </div>
+      <div class="m-scroll">
+        <table>
+          <thead>
             <tr>
-                <th>Name</th>
-                <th>Length</th>
-                <th>Width</th>
-                <th>Height</th>
-                <th>Quantity</th>
-                <th>Volume</th>
+              <th>#</th>
+              <th>SKU</th>
+              <th>Size L×W×H</th>
+              <th>X</th>
+              <th>Y</th>
+              <th>Z</th>
+              <th>Orientation</th>
+              <th>Weight kg</th>
+              <th>Vol m³</th>
             </tr>
-        </thead>
+          </thead>
+          <tbody id="mBody">
+            <tr>
+              <td colspan="9" class="no-data">Run optimization to see placement manifest.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
 
-        <tbody>
-        </tbody>
-    </table>
+  </div><!-- /.right -->
+</div><!-- /.main -->
 
-    <br>
-
-    <button onclick="calculate()">
-        Optimize
-    </button>
-
-    <div id="result"></div>
-
-</div>
-
-<script src="script.js"></script>
+<!--
+  Script load order matters:
+  1. three.js  — global THREE object
+  2. packer.js — window.Packer
+  3. renderer.js — window.Renderer (uses THREE)
+  4. app.js    — window.App (uses Packer + Renderer)
+-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="packer.js"></script>
+<script src="renderer.js"></script>
+<script src="app.js"></script>
 
 </body>
 </html>
