@@ -244,6 +244,48 @@
   }
 
   /* ─────────────────────────────────────────────
+     GENERATE PDF REPORT
+  ───────────────────────────────────────────── */
+  function generateReport() {
+    const fb = document.getElementById('fb');
+
+    if (!places.length) {
+      fb.innerHTML = '<div class="feedback fb-warn">Run optimization first before generating a report.</div>';
+      return;
+    }
+    if (!window.jspdf) {
+      fb.innerHTML = '<div class="feedback fb-warn">PDF library not loaded — check internet connection.</div>';
+      return;
+    }
+
+    const cL    = +document.getElementById('cL').value;
+    const cW    = +document.getElementById('cW').value;
+    const cH    = +document.getElementById('cH').value;
+    const maxWt = +document.getElementById('cMaxWt').value || 99999;
+
+    const runId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const now   = new Date().toLocaleString('en-GB', {
+      day: '2-digit', month: 'long', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
+    });
+    const totalWeight = places.reduce((s, p) => s + (p.item.wt || 0), 0);
+
+    ReportGen.generate({
+      containerL:  cL,
+      containerW:  cW,
+      containerH:  cH,
+      maxWeight:   maxWt,
+      placements:  places,
+      cartonTypes: types,
+      totalWeight,
+      runId,
+      timestamp:   now,
+    });
+
+    fb.innerHTML = '<div class="feedback fb-ok">✓ PDF report downloaded.</div>';
+  }
+
+  /* ─────────────────────────────────────────────
      BOOT
   ───────────────────────────────────────────── */
   function _boot() {
@@ -278,7 +320,7 @@
     removeType,
     run,
     clearAll,
-    // camera + view controls delegated to Renderer
+    generateReport,
     cam:             p  => Renderer.setCameraPreset(p),
     toggleExplode:   ()  => Renderer.toggleExplode(),
     toggleWire:      ()  => Renderer.toggleWireframe(),
