@@ -1,4 +1,6 @@
-
+/* ============================================================
+   CargoOpt3D — styles.css
+   ============================================================ */
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
@@ -323,10 +325,27 @@ select option { background: var(--ink2); color: var(--text); }
   color: var(--muted);
   margin-top: 6px;
 }
+.btn-clear {
+  background: transparent;
+  border: 1px solid var(--rim2);
+  color: var(--muted);
+  margin-top: 6px;
+}
 .btn-clear:hover {
   background: var(--red-soft);
   border-color: var(--red-edge);
   color: var(--red);
+}
+
+.btn-pdf {
+  background: transparent;
+  border: 1px solid rgba(45,212,191,0.30);
+  color: var(--teal);
+  margin-top: 6px;
+}
+.btn-pdf:hover {
+  background: var(--teal-soft);
+  border-color: rgba(45,212,191,0.55);
 }
 
 /* carton list */
