@@ -99,7 +99,6 @@ const els = {
 
   // Sequence
   sequenceList:    $('sequence-list'),
-  btnToggleSeq:    $('btn-toggle-sequence'),
 
   // Viewer toggles
   btnWireframe:    $('btn-wireframe'),
@@ -221,7 +220,7 @@ function toggleDoor() {
 
 
 /* ─────────────────────────────────────────────────────────────
-   UNIT SYSTEM  (mm ↔ cm)
+   UNIT SYSTEM  (mm ↔️ cm)
 ───────────────────────────────────────────────────────────── */
 function toMM(val) {
   return state.unit === 'cm' ? val * 10 : val;
@@ -489,6 +488,22 @@ function runOptimize() {
       const spec   = getContainerSpec();
       const result = FCOS_PACKER.packContainer(state.cartons, spec);
 
+      fetch("http://localhost:3000/api/results", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({
+    shipment_id: `FCOS-${Date.now()}`,
+    space_utilisation: result.spaceUtilisation,
+    weight_utilisation: result.weightUtilisation,
+    opt_score: result.optScore
+  })
+})
+.then(res => res.json())
+.then(data => console.log("Saved to DB:", data))
+.catch(err => console.error("DB Save Error:", err));
+
       // LCL: cap packed items to 60% volume
       if (_shipmentMode === 'LCL') {
         const maxVol = spec.length * spec.width * spec.height * 0.60;
@@ -588,35 +603,24 @@ function renderManifest() {
   const search = els.manifestSearch.value.toLowerCase();
   const sort   = els.manifestSort.value;
   let rows = [...result.packed];
-  if (search) rows = rows.filter(r =>
-    r.sku.toLowerCase().includes(search) ||
-    String(r.cartonNumber).includes(search)
-  );
+  if (search) rows = rows.filter(r => r.sku.toLowerCase().includes(search));
   if (sort === 'sku')    rows.sort((a,b) => a.sku.localeCompare(b.sku));
   if (sort === 'weight') rows.sort((a,b) => b.weight - a.weight);
-  if (sort === 'layer')  rows.sort((a,b) => (a.cartonNumber||0) - (b.cartonNumber||0));
+  if (sort === 'layer')  rows.sort((a,b) => a.y - b.y);
 
   els.manifestBody.innerHTML = '';
   if (!rows.length) {
     els.manifestBody.innerHTML = '<tr><td colspan="6" class="manifest-empty">No matches.</td></tr>';
     return;
   }
-  rows.forEach((item) => {
-    const layer = item.layerNumber || (Math.floor(item.y/500)+1);
-    const cNum  = item.cartonNumber || '—';
+  rows.forEach((item, i) => {
     const tr = document.createElement('tr');
     tr.dataset.instanceId = item.instanceId;
     tr.innerHTML = `
-      <td class="carton-num-cell">#${cNum}</td>
-      <td>
-        <div class="manifest-sku-wrap">
-          <span class="manifest-dot" style="background:${item.color}"></span>
-          ${item.sku}
-        </div>
-        <div class="manifest-layer-badge">Layer ${layer}</div>
-      </td>
-      <td class="manifest-pos-cell">${Math.round(item.x)},${Math.round(item.y)},${Math.round(item.z)}</td>
-      <td>${layer}</td>
+      <td>${i+1}</td>
+      <td>${item.sku}</td>
+      <td>${Math.round(item.x)},${Math.round(item.y)},${Math.round(item.z)}</td>
+      <td>${Math.floor(item.y/500)+1}</td>
       <td>${item.weight}kg</td>
       <td>${item.rotated?'↺':'—'}</td>
     `;
@@ -625,71 +629,10 @@ function renderManifest() {
       tr.classList.add('active-row');
       FCOS_RENDERER.selectCarton(item.instanceId);
       highlightSequenceStep(item.instanceId);
-      showCartonLocationInfo(item);
     });
     els.manifestBody.appendChild(tr);
   });
 }
-
-/* ─────────────────────────────────────────────────────────────
-   CARTON LOCATION INFO PANEL
-───────────────────────────────────────────────────────────── */
-function showCartonLocationInfo(item) {
-  const layer  = item.layerNumber || (Math.floor(item.y/500)+1);
-  const cNum   = item.cartonNumber || '—';
-  const posInLayer = item.positionInLayer || '—';
-
-  // Build human-readable location
-  const CL = state.lastResult.containerLength || 12032;
-  const depthFrac = item.x / CL;
-  const depthLabel = depthFrac < 0.33 ? 'Rear' : depthFrac < 0.66 ? 'Middle' : 'Front';
-  const sideLabel  = item.z < CL * 0.08 ? 'Left' : item.z > CL * 0.16 ? 'Right' : 'Centre';
-  const locationStr = `${depthLabel} · ${sideLabel}`;
-
-  let infoEl = document.getElementById('carton-location-info');
-  if (!infoEl) {
-    infoEl = document.createElement('div');
-    infoEl.id = 'carton-location-info';
-    infoEl.className = 'carton-location-info';
-    // Insert after manifest table
-    const manifestWrap = document.querySelector('.manifest-wrap');
-    if (manifestWrap && manifestWrap.parentNode) {
-      manifestWrap.parentNode.insertBefore(infoEl, manifestWrap.nextSibling);
-    }
-  }
-  infoEl.innerHTML = `
-    <div class="cli-header">
-      <span class="cli-carton-badge">#${cNum}</span>
-      <span class="cli-sku">${item.sku}</span>
-      <button class="cli-close" onclick="clearCartonLocationInfo()">✕</button>
-    </div>
-    <div class="cli-grid">
-      <div class="cli-item">
-        <div class="cli-lbl">Layer</div>
-        <div class="cli-val">Layer ${layer}</div>
-      </div>
-      <div class="cli-item">
-        <div class="cli-lbl">Location</div>
-        <div class="cli-val">${locationStr}</div>
-      </div>
-      <div class="cli-item">
-        <div class="cli-lbl">Weight</div>
-        <div class="cli-val">${item.weight} kg</div>
-      </div>
-      <div class="cli-item">
-        <div class="cli-lbl">Coords (mm)</div>
-        <div class="cli-val mono">${Math.round(item.x)}, ${Math.round(item.y)}, ${Math.round(item.z)}</div>
-      </div>
-    </div>
-  `;
-  infoEl.classList.add('visible');
-}
-
-function clearCartonLocationInfo() {
-  const infoEl = document.getElementById('carton-location-info');
-  if (infoEl) infoEl.classList.remove('visible');
-}
-window.clearCartonLocationInfo = clearCartonLocationInfo;
 
 /* ─────────────────────────────────────────────────────────────
    SEQUENCE
@@ -701,23 +644,14 @@ function renderSequence(sequence) {
     return;
   }
   for (const step of sequence) {
-    // Find matching packed item for carton/layer numbers
-    const packedItem = state.lastResult?.packed.find(p => p.instanceId === step.instanceId);
-    const cNum  = packedItem?.cartonNumber || step.step;
-    const layer = packedItem?.layerNumber  || step.layer || 1;
-
     const div = document.createElement('div');
     div.className = 'seq-step';
-    div.dataset.instanceId = step.instanceId || '';
     div.dataset.sku  = step.sku;
     div.dataset.step = step.step;
     div.innerHTML = `
-      <div class="seq-num">#${cNum}</div>
+      <div class="seq-num">${step.step}</div>
       <div class="seq-content">
-        <div class="seq-sku-row">
-          <span class="seq-sku">${step.sku}</span>
-          <span class="seq-layer-chip">Layer ${layer}</span>
-        </div>
+        <div class="seq-sku">${step.sku}</div>
         <div class="seq-action">${step.action}</div>
         <div class="seq-pos">${step.pos}</div>
       </div>
@@ -725,10 +659,10 @@ function renderSequence(sequence) {
     div.addEventListener('click', () => {
       document.querySelectorAll('.seq-step').forEach(s => s.classList.remove('highlight'));
       div.classList.add('highlight');
-      if (packedItem) {
-        FCOS_RENDERER.selectCarton(packedItem.instanceId);
-        highlightManifestRow(packedItem.instanceId);
-        showCartonLocationInfo(packedItem);
+      const item = state.lastResult.packed.find(p => p.sku === step.sku);
+      if (item) {
+        FCOS_RENDERER.selectCarton(item.instanceId);
+        highlightManifestRow(item.instanceId);
       }
     });
     els.sequenceList.appendChild(div);
@@ -739,10 +673,9 @@ function highlightSequenceStep(instanceId) {
   const item = state.lastResult?.packed.find(p => p.instanceId === instanceId);
   if (!item) return;
   document.querySelectorAll('.seq-step').forEach(s => {
-    s.classList.toggle('highlight', s.dataset.instanceId === instanceId);
+    s.classList.toggle('highlight', s.dataset.sku === item.sku);
   });
-  const el = document.querySelector(`.seq-step[data-instance-id="${instanceId}"]`) ||
-             document.querySelector(`.seq-step[data-sku="${item.sku}"]`);
+  const el = document.querySelector(`.seq-step[data-sku="${item.sku}"]`);
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
@@ -926,12 +859,6 @@ function bindEvents() {
   // ── Manifest ──────────────────────────────────────────
   els.manifestSearch.addEventListener('input', renderManifest);
   els.manifestSort.addEventListener('change', renderManifest);
-
-  els.btnToggleSeq?.addEventListener('click', () => {
-    const isCollapsed = els.sequenceList.classList.toggle('collapsed');
-    els.btnToggleSeq.textContent = isCollapsed ? 'View sequence' : 'Hide sequence';
-    els.btnToggleSeq.classList.toggle('active', !isCollapsed);
-  });
 
   // ── 3D view buttons ───────────────────────────────────
   document.querySelectorAll('.vp-btn').forEach(btn => {
