@@ -1,514 +1,314 @@
 /**
- * report.js — PDF Report Generator
- *
- * Generates a professional PDF report of the cargo optimization run
- * using jsPDF (loaded via CDN in index.html).
- *
- * Depends on: window.jspdf.jsPDF (jsPDF CDN)
- * Called by:  App.generateReport() in app.js
- * No server / no install required — pure client-side.
+ * report.js — FCOS PDF Report Generator v4.0
+ * Changes from v3.1:
+ *   - Report now contains ONLY visualisation pages: Overview → Stack 1..N (diagrams only)
+ *   - Removed Loading Manifest and Loading Sequence pages entirely
+ *   - Overview page: per-stack table (Stack #, Boxes in stack, Weight in stack, Avg weight/carton)
+ *   - Stack pages: diagram only (no carton list table)
  */
+'use strict';
+(function () {
 
-(function (global) {
-  'use strict';
+const C = {
+  navy:   [15,  40,  80],
+  amber:  [214, 130, 12],
+  amberL: [255, 200, 80],
+  text:   [20,  30,  50],
+  muted:  [110, 125, 148],
+  border: [210, 218, 230],
+  surface:[245, 247, 250],
+  white:  [255, 255, 255],
+  success:[22,  163, 74],
+  danger: [220, 38,  38],
+};
+const PW = 210, PH = 297, ML = 14, MR = 14, CW = PW - ML - MR;
 
-  /* ── THEME ── */
-  const C = {
-    navy:       [11,  15,  35],
-    blue:       [37,  99,  235],
-    blueLight:  [219, 234, 254],
-    amber:      [180, 110,  10],
-    amberLight: [254, 243, 199],
-    green:      [21,  128,  61],
-    greenLight: [220, 252, 231],
-    red:        [185,  28,  28],
-    redLight:   [254, 226, 226],
-    slate:      [71,  85, 105],
-    slateLight: [241, 245, 249],
-    border:     [203, 213, 225],
-    white:      [255, 255, 255],
-    black:      [15,  23,  42],
-    rowAlt:     [248, 250, 252],
-  };
+const mmFmt  = v => `${Math.round(v)} mm`;
+const pctFmt = v => `${(v * 100).toFixed(1)}%`;
+const kgFmt  = v => `${Number(v).toFixed(1)} kg`;
+const volFmt = v => `${(v / 1e9).toFixed(3)} m\u00b3`;
 
-  /* hex color string from THREE.js int → [r,g,b] */
-  function hexToRgb(hex) {
-    const n = typeof hex === 'number' ? hex : parseInt(hex.replace('#',''), 16);
-    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+function hexToRgb(hex) {
+  const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return r ? [parseInt(r[1],16), parseInt(r[2],16), parseInt(r[3],16)] : [59,130,246];
+}
+
+/* ─── DEPTH-SLICE GROUPING ─────────────────────────────────────
+ * Groups packed cartons that share the same depth position (X)
+ * into one cross-sectional "wall" — exactly the highlighted block
+ * shown in the 3D viewer (multiple rows/columns of boxes that sit
+ * at the same depth, filled floor-to-ceiling, side-to-side, before
+ * the pack advances toward the door). Each such group is treated
+ * as ONE level in the report and rendered as a vertical, front-on
+ * elevation grid — vertical stacking, exactly as highlighted.
+ * ─────────────────────────────────────────────────────────── */
+function computeStacks(packed) {
+  const TOL = 40; // mm — depth-slice matching tolerance
+  const stacks = [];
+  for (const p of packed) {
+    let s = stacks.find(s => Math.abs(s.x - p.x) < TOL);
+    if (!s) { s = { x: p.x, items: [] }; stacks.push(s); }
+    s.items.push(p);
   }
+  // Within a slice: bottom → top (Y), then left → right (Z)
+  for (const s of stacks) s.items.sort((a, b) => (a.y !== b.y ? a.y - b.y : a.z - b.z));
+  // Back wall → door
+  stacks.sort((a, b) => a.x - b.x);
+  stacks.forEach((s, i) => { s.stackNumber = i + 1; });
+  return stacks;
+}
 
-  /* ── HELPERS ── */
-  function setFill(doc, rgb)   { doc.setFillColor(...rgb); }
-  function setDraw(doc, rgb)   { doc.setDrawColor(...rgb); }
-  function setFont(doc, rgb)   { doc.setTextColor(...rgb); }
-  function setSize(doc, s)     { doc.setFontSize(s); }
-  function bold(doc)           { doc.setFont('helvetica', 'bold'); }
-  function normal(doc)         { doc.setFont('helvetica', 'normal'); }
-  function italic(doc)         { doc.setFont('helvetica', 'italic'); }
+/* ─── PAGE CHROME ─────────────────────────────────────────── */
+function pageHeader(doc, title, shipId) {
+  doc.setFillColor(...C.navy);
+  doc.rect(0, 0, PW, 20, 'F');
+  doc.setFillColor(...C.amber);
+  doc.rect(0, 0, PW, 2.5, 'F');
+  doc.setFontSize(9.5); doc.setFont('helvetica','bold');
+  doc.setTextColor(...C.amberL); doc.text('FCOS', ML, 13.5);
+  doc.setFontSize(8); doc.setFont('helvetica','normal');
+  doc.setTextColor(180,195,220); doc.text(`\u2014 ${title}`, ML+14, 13.5);
+  doc.setFont('courier','normal'); doc.setFontSize(7);
+  doc.setTextColor(160,175,200); doc.text(shipId||'', PW-MR, 13.5, {align:'right'});
+}
 
-  /* draw a filled rounded rect */
-  function fillRect(doc, x, y, w, h, rgb, r = 0) {
-    setFill(doc, rgb);
-    if (r > 0) doc.roundedRect(x, y, w, h, r, r, 'F');
-    else        doc.rect(x, y, w, h, 'F');
-  }
+function pageFooter(doc, shipment) {
+  const pg = doc.internal.getCurrentPageInfo().pageNumber;
+  doc.setFillColor(...C.surface);
+  doc.setDrawColor(...C.border); doc.setLineWidth(0.3);
+  doc.rect(0, PH-10, PW, 10, 'F');
+  doc.line(0, PH-10, PW, PH-10);
+  doc.setFontSize(6.5); doc.setFont('helvetica','normal');
+  doc.setTextColor(...C.muted);
+  doc.text('Generated by FCOS \u2014 Freight Container Optimization System', ML, PH-4);
+  doc.text(`Page ${pg}`, PW-MR, PH-4, {align:'right'});
+  if (shipment.customer && shipment.customer !== 'N/A')
+    doc.text(`Customer: ${shipment.customer}`, PW/2, PH-4, {align:'center'});
+}
 
-  /* draw a stroked rect */
-  function strokeRect(doc, x, y, w, h, rgb, lw = 0.3) {
-    setDraw(doc, rgb);
-    doc.setLineWidth(lw);
-    doc.rect(x, y, w, h, 'S');
-  }
+function sectionBar(doc, num, label, y) {
+  doc.setFillColor(...C.navy); doc.rect(ML, y, CW, 8, 'F');
+  doc.setFillColor(...C.amber); doc.rect(ML, y, 2.5, 8, 'F');
+  doc.setFontSize(7.5); doc.setFont('helvetica','bold');
+  doc.setTextColor(...C.amberL); doc.text(String(num), ML+5.5, y+5.3);
+  doc.setTextColor(...C.white); doc.text(label, ML+14, y+5.3);
+  return y + 11;
+}
 
-  /* text shorthand */
-  function text(doc, str, x, y, opts = {}) {
-    doc.text(String(str), x, y, opts);
-  }
+/* ─── MAIN ────────────────────────────────────────────────── */
+function generateReport(shipment, containerSpec, result, sequence) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({orientation:'portrait', unit:'mm', format:'a4'});
 
-  /* horizontal line */
-  function hline(doc, x, y, w, rgb, lw = 0.3) {
-    setDraw(doc, rgb);
-    doc.setLineWidth(lw);
-    doc.line(x, y, x + w, y);
-  }
+  // Gather cross-sectional stacks — each one = one visual page.
+  const stacks = computeStacks(result.packed);
 
-  /* ── PAGE SETUP ── */
-  const PW = 210, PH = 297; // A4 mm
-  const ML = 14, MR = 14, MT = 14;
-  const CW_PAGE = PW - ML - MR;
+  // PAGE 1: Overview (stack count, boxes/weight/avg per stack — no shipment/manifest text)
+  pageOverview(doc, shipment, containerSpec, result, stacks);
 
-  /* ── NEW PAGE BOILERPLATE ── */
-  function addHeader(doc, runId, pageNum) {
-    // Top strip
-    fillRect(doc, 0, 0, PW, 10, C.navy);
-    setFont(doc, C.white); bold(doc); setSize(doc, 7);
-    text(doc, 'CargoOpt3D  ·  Cargo Loading Optimization Report', ML, 6.8);
-    normal(doc); setSize(doc, 6.5);
-    text(doc, `Run ID: ${runId}`, PW - MR, 6.8, { align: 'right' });
-
-    // Footer
-    fillRect(doc, 0, PH - 8, PW, 8, C.slateLight);
-    setFont(doc, C.slate); setSize(doc, 6);
-    normal(doc);
-    text(doc, 'Generated by CargoOpt3D — 3D Carton Loading & Container Space Optimization System', ML, PH - 3.2);
-    text(doc, `Page ${pageNum}`, PW - MR, PH - 3.2, { align: 'right' });
-  }
-
-  /* ── SECTION HEADING ── */
-  function sectionHead(doc, label, y) {
-    fillRect(doc, ML, y, CW_PAGE, 7, C.blueLight, 2);
-    setFont(doc, C.blue); bold(doc); setSize(doc, 9);
-    text(doc, label, ML + 4, y + 5);
-    normal(doc);
-    return y + 10;
-  }
-
-  /* ── TWO-COLUMN KEY-VALUE TABLE ── */
-  function kvTable(doc, rows, y, colW = [70, CW_PAGE - 70]) {
-    const ROW_H = 7;
-    rows.forEach((row, i) => {
-      const bg = i % 2 === 0 ? C.white : C.rowAlt;
-      fillRect(doc, ML, y, CW_PAGE, ROW_H, bg);
-      strokeRect(doc, ML, y, CW_PAGE, ROW_H, C.border);
-
-      setFont(doc, C.slate); normal(doc); setSize(doc, 8.5);
-      text(doc, row[0], ML + 3, y + 5);
-
-      setFont(doc, C.black); bold(doc);
-      text(doc, row[1], ML + colW[0] + 3, y + 5);
-
-      y += ROW_H;
-    });
-    normal(doc);
-    return y + 2;
-  }
-
-  /* ── THREE-COLUMN TABLE WITH HEADER ── */
-  function threeColTable(doc, headers, rows, y, colWidths) {
-    const ROW_H = 6.5;
-    const totalW = colWidths.reduce((a, b) => a + b, 0);
-
-    // Header row
-    fillRect(doc, ML, y, totalW, ROW_H, C.navy);
-    setFont(doc, C.white); bold(doc); setSize(doc, 7.5);
-    let cx = ML + 3;
-    headers.forEach((h, i) => {
-      text(doc, h, cx, y + 4.5);
-      cx += colWidths[i];
-    });
-    y += ROW_H;
-
-    // Data rows
-    rows.forEach((row, ri) => {
-      const bg = ri % 2 === 0 ? C.white : C.rowAlt;
-      fillRect(doc, ML, y, totalW, ROW_H, bg);
-      strokeRect(doc, ML, y, totalW, ROW_H, C.border, 0.2);
-
-      cx = ML + 3;
-      row.forEach((cell, ci) => {
-        setFont(doc, ci === 0 ? C.black : C.slate);
-        ci === 0 ? bold(doc) : normal(doc);
-        setSize(doc, 7.5);
-        text(doc, String(cell), cx, y + 4.5);
-        cx += colWidths[ci];
-      });
-      y += ROW_H;
-    });
-
-    normal(doc);
-    return y + 3;
-  }
-
-  /* ── HORIZONTAL BAR CHART ── */
-  function barChart(doc, items, y) {
-    // items: [{ label, value, max, color, unit }]
-    const BAR_H = 7, GAP = 4, LABEL_W = 28, BAR_AREA = CW_PAGE - LABEL_W - 20;
-
-    items.forEach(item => {
-      const pct = Math.min(item.value / item.max, 1);
-
-      // label
-      setFont(doc, C.slate); normal(doc); setSize(doc, 8);
-      text(doc, item.label, ML, y + 5.5);
-
-      // track
-      fillRect(doc, ML + LABEL_W, y + 1, BAR_AREA, BAR_H - 2, C.slateLight, 2);
-
-      // fill
-      if (pct > 0) {
-        fillRect(doc, ML + LABEL_W, y + 1, BAR_AREA * pct, BAR_H - 2, item.color, 2);
-      }
-
-      // value label
-      setFont(doc, C.black); bold(doc); setSize(doc, 7.5);
-      text(doc, `${item.value.toFixed(1)}${item.unit}`, ML + LABEL_W + BAR_AREA + 3, y + 5.5);
-
-      y += BAR_H + GAP;
-    });
-
-    normal(doc);
-    return y + 2;
-  }
-
-  /* ── MINI PIE CHART (manual sectors) ── */
-  function pieChart(doc, slices, cx, cy, r) {
-    // slices: [{ label, value, color }]
-    const total = slices.reduce((s, sl) => s + sl.value, 0);
-    if (!total) return;
-    let angle = -Math.PI / 2;
-
-    slices.forEach(sl => {
-      const sweep = (sl.value / total) * 2 * Math.PI;
-      // jsPDF doesn't have pie primitives — draw using lines approximation
-      // We'll fake it with a filled "wedge" using many tiny rectangles... 
-      // Better: use doc.circle for single-slice, or just draw legend squares
-      // For multi-slice we use the canvas approach via SVG path encoded as lines
-      const steps = Math.max(6, Math.round(sweep / 0.15));
-      const pts = [[cx, cy]];
-      for (let i = 0; i <= steps; i++) {
-        const a = angle + (sweep * i) / steps;
-        pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
-      }
-      setFill(doc, sl.color);
-      doc.setDrawColor(...sl.color);
-      doc.lines(
-        pts.slice(1).map((p, i) => [
-          p[0] - (i === 0 ? cx : pts[i][0]),
-          p[1] - (i === 0 ? cy : pts[i][1])
-        ]),
-        pts[0][0], pts[0][1],
-        [1, 1], 'FD', true
-      );
-      angle += sweep;
-    });
-
-    // White circle in centre (donut effect)
-    setFill(doc, C.white);
-    doc.circle(cx, cy, r * 0.45, 'F');
-  }
-
-  /* ── UTILIZATION STATUS BADGE ── */
-  function utilStatus(pct) {
-    if (pct >= 80) return { label: 'Excellent', color: C.green,  bg: C.greenLight };
-    if (pct >= 55) return { label: 'Good',      color: C.blue,   bg: C.blueLight  };
-    if (pct >= 30) return { label: 'Moderate',  color: C.amber,  bg: C.amberLight };
-    return              { label: 'Low',        color: C.red,    bg: C.redLight   };
-  }
-
-  function badge(doc, label, x, y, color, bg) {
-    const w = doc.getTextWidth(label) + 6;
-    fillRect(doc, x, y - 4, w, 5.5, bg, 1.5);
-    setFont(doc, color); bold(doc); setSize(doc, 7);
-    text(doc, label, x + 3, y);
-    normal(doc);
-    return x + w + 3;
-  }
-
-  /* ═══════════════════════════════════════════════
-     MAIN EXPORT FUNCTION
-  ═══════════════════════════════════════════════ */
-  function generate(data) {
-    /*
-      data = {
-        containerL, containerW, containerH,   // cm
-        maxWeight,                             // kg
-        placements,                            // [{ x,y,z,l,w,h, item:{ sku,wt,color } }]
-        cartonTypes,                           // [{ sku,l,w,h,qty,wt,color }]
-        totalWeight,
-        runId,
-        timestamp,
-      }
-    */
-    const { jsPDF } = window.jspdf;
-    const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
-
-    const runId    = data.runId;
-    const now      = data.timestamp;
-    const cL_m     = (data.containerL / 100).toFixed(2);
-    const cW_m     = (data.containerW / 100).toFixed(2);
-    const cH_m     = (data.containerH / 100).toFixed(2);
-    const cVol     = data.containerL * data.containerW * data.containerH / 1e6; // m³
-    const pVol     = data.placements.reduce((s, p) => s + p.l * p.w * p.h / 1e6, 0);
-    const spaceUtil = (pVol / cVol) * 100;
-    const wtUtil    = (data.totalWeight / data.maxWeight) * 100;
-    const placed    = data.placements.length;
-    const requested = data.cartonTypes.reduce((s, t) => s + t.qty, 0);
-    const unplaced  = requested - placed;
-
-    /* ─── PAGE 1 ─── */
-    let page = 1;
-    addHeader(doc, runId, page);
-
-    /* ── TITLE BLOCK ── */
-    let y = 18;
-    fillRect(doc, ML, y, CW_PAGE, 22, C.navy, 3);
-    setFont(doc, C.white); bold(doc); setSize(doc, 16);
-    text(doc, '3D Carton Loading Optimization Report', ML + CW_PAGE / 2, y + 9, { align: 'center' });
-    setFont(doc, [147, 197, 253]); normal(doc); setSize(doc, 8);
-    text(doc, `Generated: ${now}   ·   Run ID: ${runId}`, ML + CW_PAGE / 2, y + 16, { align: 'center' });
-    y += 27;
-
-    /* ── UTILIZATION SUMMARY CARDS ── */
-    const cards = [
-      { label: 'Space Utilization', value: spaceUtil.toFixed(1) + '%', ...utilStatus(spaceUtil) },
-      { label: 'Weight Utilization', value: wtUtil.toFixed(1) + '%',   ...utilStatus(wtUtil)    },
-      { label: 'Cartons Placed',  value: String(placed),  color: C.blue,  bg: C.blueLight  },
-      { label: 'Unplaced',        value: String(unplaced), color: unplaced > 0 ? C.red : C.green, bg: unplaced > 0 ? C.redLight : C.greenLight },
-    ];
-    const cardW = (CW_PAGE - 9) / 4;
-    cards.forEach((card, i) => {
-      const cx = ML + i * (cardW + 3);
-      fillRect(doc, cx, y, cardW, 20, card.bg, 3);
-      // accent bar top
-      fillRect(doc, cx, y, cardW, 2, card.color, 0);
-      setFont(doc, card.color); bold(doc); setSize(doc, 14);
-      text(doc, card.value, cx + cardW / 2, y + 11, { align: 'center' });
-      setFont(doc, C.slate); normal(doc); setSize(doc, 7);
-      text(doc, card.label, cx + cardW / 2, y + 17, { align: 'center' });
-    });
-    y += 26;
-
-    /* ── CONTAINER SPECIFICATIONS ── */
-    y = sectionHead(doc, '1. Container Specifications', y);
-    y = kvTable(doc, [
-      ['Length',          `${cL_m} m  (${data.containerL} cm)`],
-      ['Width',           `${cW_m} m  (${data.containerW} cm)`],
-      ['Height',          `${cH_m} m  (${data.containerH} cm)`],
-      ['Weight Capacity', `${data.maxWeight.toLocaleString()} kg`],
-      ['Total Volume',    `${cVol.toFixed(3)} m³`],
-    ], y);
-
-    /* ── UTILIZATION METRICS ── */
-    y = sectionHead(doc, '2. Utilization Metrics', y);
-    y = kvTable(doc, [
-      ['Total cartons placed',  `${placed}`],
-      ['Unplaced cartons',      `${unplaced}`],
-      ['Total weight loaded',   `${data.totalWeight.toFixed(1)} kg`],
-      ['Container volume used', `${pVol.toFixed(3)} m³`],
-      ['Space utilization',     `${spaceUtil.toFixed(1)}%`],
-      ['Weight utilization',    `${wtUtil.toFixed(1)}%`],
-    ], y);
-
-    /* ── UTILIZATION CHARTS ── */
-    y = sectionHead(doc, '3. Utilization Charts', y);
-    y = barChart(doc, [
-      { label: 'Space',  value: spaceUtil, max: 100, color: spaceUtil > 80 ? C.green : spaceUtil > 55 ? C.blue : C.amber, unit: '%' },
-      { label: 'Weight', value: wtUtil,    max: 100, color: wtUtil    > 80 ? C.red   : wtUtil    > 55 ? C.amber : C.green, unit: '%' },
-      { label: 'Cartons placed', value: placed, max: requested, color: C.blue, unit: ` / ${requested}` },
-    ], y);
-
-    /* ── CARTON TYPE SUMMARY ── */
-    y = sectionHead(doc, '4. Carton Type Summary', y);
-
-    // Mini legend with colour swatches
-    const typeCounts = {};
-    data.placements.forEach(p => {
-      typeCounts[p.item.sku] = (typeCounts[p.item.sku] || 0) + 1;
-    });
-    const typeRows = data.cartonTypes.map(t => {
-      const rgb = hexToRgb(t.color);
-      const placedCount = typeCounts[t.sku] || 0;
-      return { t, rgb, placedCount };
-    });
-
-    // Swatch legend row
-    const swatchSize = 4;
-    typeRows.forEach((tr, i) => {
-      const row = Math.floor(i / 3);
-      const col = i % 3;
-      const sx = ML + col * 60;
-      const sy = y + row * 9;
-      fillRect(doc, sx, sy, swatchSize, swatchSize, tr.rgb, 1);
-      setFont(doc, C.black); normal(doc); setSize(doc, 7.5);
-      text(doc, `${tr.t.sku}  ×${tr.placedCount} placed`, sx + swatchSize + 2, sy + 3.5);
-    });
-    y += Math.ceil(typeRows.length / 3) * 9 + 3;
-
-    // Type table
-    y = threeColTable(doc,
-      ['SKU / Label', 'Dims (L×W×H cm)', 'Qty Req.', 'Placed', 'Wt/box kg', 'Total Wt kg'],
-      data.cartonTypes.map(t => [
-        t.sku,
-        `${t.l}×${t.w}×${t.h}`,
-        t.qty,
-        typeCounts[t.sku] || 0,
-        t.wt,
-        ((typeCounts[t.sku] || 0) * t.wt).toFixed(1),
-      ]),
-      y,
-      [38, 36, 18, 18, 22, 24]
-    );
-
-    /* ── PIE CHART ── */
-    if (data.cartonTypes.length > 1) {
-      const PIE_X = ML + CW_PAGE - 30, PIE_Y = y + 22, PIE_R = 18;
-      const slices = data.cartonTypes.map(t => ({
-        label: t.sku,
-        value: typeCounts[t.sku] || 0,
-        color: hexToRgb(t.color),
-      })).filter(s => s.value > 0);
-
-      if (slices.length) {
-        // Label
-        setFont(doc, C.slate); bold(doc); setSize(doc, 7.5);
-        text(doc, 'Cartons by type', PIE_X, y + 3, { align: 'center' });
-        pieChart(doc, slices, PIE_X, PIE_Y, PIE_R);
-
-        // Legend next to pie
-        let ly = y + 6;
-        slices.forEach(sl => {
-          const pct = (sl.value / placed * 100).toFixed(0);
-          fillRect(doc, ML + CW_PAGE - 62, ly, 4, 4, sl.color, 1);
-          setFont(doc, C.slate); normal(doc); setSize(doc, 7);
-          text(doc, `${sl.label}: ${sl.value} (${pct}%)`, ML + CW_PAGE - 56, ly + 3.2);
-          ly += 6;
-        });
-        y = Math.max(y + PIE_R * 2 + 10, ly + 4);
-      }
-    }
-
-    /* ─── PAGE 2+: PLACEMENT COORDINATES ─── */
+  // Per-stack pages — back wall → door (each = one cross-sectional wall, diagram only)
+  for (const stack of stacks) {
     doc.addPage();
-    page++;
-    addHeader(doc, runId, page);
-    y = 18;
-
-    y = sectionHead(doc, '5. Carton Placement Coordinates', y);
-
-    // Note
-    setFont(doc, C.slate); italic(doc); setSize(doc, 7.5);
-    text(doc, 'Coordinates show the bottom-left-back corner (origin) of each placed carton. Units: cm.', ML, y);
-    normal(doc);
-    y += 5;
-
-    const COL_W = [10, 30, 22, 18, 18, 18, 18, 18, 18, 12];
-    const HEADERS = ['#', 'SKU', 'Size L×W×H', 'X', 'Y', 'Z', 'L', 'W', 'H', 'Wt kg'];
-    const ROW_H = 6;
-    const TOTAL_W = COL_W.reduce((a, b) => a + b, 0);
-    const PAGE_BOTTOM = PH - 14;
-
-    const drawTableHeader = (yy) => {
-      fillRect(doc, ML, yy, TOTAL_W, ROW_H, C.navy);
-      setFont(doc, C.white); bold(doc); setSize(doc, 7);
-      let cx = ML + 2;
-      HEADERS.forEach((h, i) => { text(doc, h, cx, yy + 4.2); cx += COL_W[i]; });
-      return yy + ROW_H;
-    };
-
-    y = drawTableHeader(y);
-
-    data.placements.forEach((p, ri) => {
-      // Page break check
-      if (y + ROW_H > PAGE_BOTTOM) {
-        doc.addPage(); page++;
-        addHeader(doc, runId, page);
-        y = 18;
-        y = sectionHead(doc, '5. Carton Placement Coordinates (continued)', y);
-        y = drawTableHeader(y);
-      }
-
-      const bg = ri % 2 === 0 ? C.white : C.rowAlt;
-      fillRect(doc, ML, y, TOTAL_W, ROW_H, bg);
-      strokeRect(doc, ML, y, TOTAL_W, ROW_H, C.border, 0.15);
-
-      // Color swatch in first col
-      const rgb = hexToRgb(p.item.color);
-      fillRect(doc, ML + 2, y + 1.5, 3, 3, rgb, 0.5);
-
-      const cells = [
-        ri + 1,
-        p.item.sku,
-        `${p.l}×${p.w}×${p.h}`,
-        p.x.toFixed(1),
-        p.y.toFixed(1),
-        p.z.toFixed(1),
-        p.l,
-        p.w,
-        p.h,
-        p.item.wt,
-      ];
-
-      let cx = ML + 2;
-      cells.forEach((cell, ci) => {
-        if (ci === 0) { cx += COL_W[0]; return; } // skip # col (swatch drawn above)
-        setFont(doc, ci <= 2 ? C.black : C.slate);
-        ci <= 2 ? bold(doc) : normal(doc);
-        setSize(doc, 7);
-        text(doc, String(cell), cx, y + 4.2);
-        cx += COL_W[ci];
-      });
-
-      // Re-draw # separately after swatch
-      setFont(doc, C.slate); normal(doc); setSize(doc, 7);
-      text(doc, String(ri + 1), ML + 6, y + 4.2);
-
-      y += ROW_H;
-    });
-
-    y += 4;
-
-    /* ── SUMMARY FOOTER ON LAST PAGE ── */
-    if (y + 20 > PAGE_BOTTOM) {
-      doc.addPage(); page++;
-      addHeader(doc, runId, page);
-      y = 18;
-    }
-
-    fillRect(doc, ML, y, CW_PAGE, 16, C.slateLight, 3);
-    strokeRect(doc, ML, y, CW_PAGE, 16, C.border);
-    setFont(doc, C.navy); bold(doc); setSize(doc, 9);
-    text(doc, 'Optimization Summary', ML + 5, y + 6);
-    setFont(doc, C.slate); normal(doc); setSize(doc, 8);
-    text(doc,
-      `${placed} of ${requested} cartons placed  ·  Space: ${spaceUtil.toFixed(1)}%  ·  Weight: ${data.totalWeight.toFixed(0)} kg / ${data.maxWeight.toLocaleString()} kg  ·  Volume: ${pVol.toFixed(3)} m³ / ${cVol.toFixed(3)} m³`,
-      ML + 5, y + 13
-    );
-
-    /* ── SAVE ── */
-    const filename = `CargoOpt3D_Report_${runId.slice(0, 8)}.pdf`;
-    doc.save(filename);
+    pageHeader(doc, `STACK ${stack.stackNumber} \u2014 CARGO LAYOUT`, shipment.id);
+    pageFooter(doc, shipment);
+    pageStack(doc, stack, containerSpec, shipment);
   }
 
-  global.ReportGen = { generate };
+  doc.save(`FCOS_${shipment.id||'Report'}_${Date.now()}.pdf`);
+}
 
-})(window);
+/* ═══════════════════════════════════════════
+   OVERVIEW PAGE (page 1) — stacks / boxes / weight / avg only
+═══════════════════════════════════════════ */
+function pageOverview(doc, shipment, spec, result, stacks) {
+  // White background
+  doc.setFillColor(255,255,255); doc.rect(0,0,PW,PH,'F');
+  // Navy header
+  doc.setFillColor(...C.navy); doc.rect(0,0,PW,40,'F');
+  doc.setFillColor(...C.amber); doc.rect(0,0,PW,3,'F');
+  doc.setFillColor(...C.amber); doc.rect(ML,7,3,26,'F');
+  doc.setFontSize(24); doc.setFont('helvetica','bold');
+  doc.setTextColor(...C.amberL); doc.text('FCOS', ML+9, 19);
+  doc.setFontSize(8); doc.setFont('helvetica','normal');
+  doc.setTextColor(180,195,215); doc.text('LOADING PLAN \u2014 STACK OVERVIEW', ML+9, 26);
+  doc.setFontSize(7); doc.setFont('courier','normal');
+  doc.setTextColor(170,190,220);
+  const ts = new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'});
+  doc.text(`${shipment.id||'N/A'}  \u00b7  ${ts}`, ML+9, 32);
+
+  let y = 48;
+
+  // Top summary strip
+  const totalBoxes  = result.packed.length;
+  const totalWeight = result.totalWeight;
+  const totalStacks = stacks.length;
+  const avgPerStack = totalStacks ? totalBoxes / totalStacks : 0;
+
+  const cw2 = (CW-9)/4, ch = 20;
+  const summary = [
+    {label:'Total Stacks',    value:String(totalStacks),       color:C.navy},
+    {label:'Total Boxes',     value:String(totalBoxes),        color:C.navy},
+    {label:'Total Weight',    value:kgFmt(totalWeight),        color:C.navy},
+    {label:'Avg Boxes/Stack', value:avgPerStack.toFixed(1),    color:C.amber},
+  ];
+  for (let i=0;i<summary.length;i++) {
+    const kx = ML + i*(cw2+3);
+    doc.setFillColor(...C.surface); doc.setDrawColor(...C.border); doc.setLineWidth(0.3);
+    doc.roundedRect(kx, y, cw2, ch, 2, 2, 'FD');
+    doc.setFillColor(...summary[i].color); doc.roundedRect(kx, y, 2.5, ch, 1, 1, 'F');
+    doc.setFontSize(14); doc.setFont('helvetica','bold');
+    doc.setTextColor(...summary[i].color); doc.text(summary[i].value, kx+7, y+11.5);
+    doc.setFontSize(6.3); doc.setFont('helvetica','normal');
+    doc.setTextColor(...C.muted); doc.text(summary[i].label.toUpperCase(), kx+7, y+16.5);
+  }
+  y += ch + 10;
+
+  // Per-stack table
+  y = sectionBar(doc, '01', 'STACK-BY-STACK BREAKDOWN  (back wall \u2192 door)', y);
+
+  const rows = stacks.map(s => {
+    const items   = s.items;
+    const wTotal  = items.reduce((sum,p)=>sum+p.weight, 0);
+    const avgW    = items.length ? wTotal / items.length : 0;
+    return ['', `Stack ${s.stackNumber}`, String(items.length), kgFmt(wTotal), kgFmt(avgW)];
+  });
+
+  doc.autoTable({
+    startY: y,
+    head: [['', 'Stack', 'Boxes in Stack', 'Weight in Stack', 'Avg Wt / Carton']],
+    body: rows,
+    margin: {left:ML, right:MR, top:23, bottom:14},
+    headStyles:         {fillColor:C.navy, textColor:C.white, fontSize:8, fontStyle:'bold', cellPadding:3.2},
+    bodyStyles:         {fillColor:[255,255,255], textColor:C.text, fontSize:8.5, cellPadding:3.4},
+    alternateRowStyles: {fillColor:C.surface},
+    columnStyles: {
+      0:{cellWidth:8},
+      1:{cellWidth:30, fontStyle:'bold', textColor:C.navy},
+      2:{cellWidth:42},
+      3:{cellWidth:46},
+      4:{cellWidth:46},
+    },
+    theme: 'plain',
+    willDrawCell: (data) => {
+      if (data.section==='body' && data.column.index===0) {
+        const s = stacks[data.row.index];
+        const first = s && s.items[0];
+        if (first) {
+          doc.setFillColor(...hexToRgb(first.color||'#3B82F6'));
+          doc.circle(data.cell.x+4, data.cell.y+data.cell.height/2, 1.8, 'F');
+        }
+      }
+    },
+    didDrawPage: () => {
+      pageFooter(doc, shipment);
+    },
+  });
+}
+
+/* ═══════════════════════════════════════════
+   STACK PAGE (cross-sectional wall = one level)
+   Visualisation only — no carton list table.
+═══════════════════════════════════════════ */
+function pageStack(doc, stack, spec, shipment) {
+  const stackNum = stack.stackNumber;
+  const items    = stack.items; // bottom→top, left→right
+  let y = 23;
+
+  // Stack badge + stats
+  doc.setFillColor(...C.navy); doc.roundedRect(ML, y, 38, 9, 2, 2, 'F');
+  doc.setFontSize(9); doc.setFont('helvetica','bold');
+  doc.setTextColor(...C.white); doc.text(`STACK  ${stackNum}`, ML+4, y+6.3);
+
+  const sw   = items.reduce((s,p)=>s+p.weight, 0);
+  const yMax = Math.max(...items.map(p=>p.y+p.h));
+  const avgW = items.length ? sw / items.length : 0;
+  doc.setFontSize(8); doc.setFont('helvetica','normal');
+  doc.setTextColor(...C.text);
+  doc.text(`${items.length} box${items.length!==1?'es':''}  \u00b7  ${sw.toFixed(1)} kg total  \u00b7  avg ${avgW.toFixed(1)} kg/box  \u00b7  up to ${Math.round(yMax)} mm tall`, ML+42, y+6.3);
+  y += 13;
+
+  // ── Caption banner — replaces faint floating text inside the diagram ──
+  doc.setFillColor(...C.navy); doc.rect(ML, y, CW, 7, 'F');
+  doc.setFillColor(...C.amber); doc.rect(ML, y, 2.5, 7, 'F');
+  doc.setFontSize(7); doc.setFont('helvetica','bold');
+  doc.setTextColor(...C.white);
+  doc.text('FRONT ELEVATION', ML+6, y+4.7);
+  doc.setFont('helvetica','normal'); doc.setTextColor(...C.amberL);
+  doc.text('(looking from the door)', ML+34, y+4.7);
+  doc.setFont('helvetica','bold'); doc.setTextColor(...C.white);
+  doc.text(`Depth slice  X \u2248 ${Math.round(stack.x)} mm from back wall`, ML+CW-4, y+4.7, {align:'right'});
+  y += 10;
+
+  // ── Front-on elevation diagram — boxes stacked vertically AND
+  //    side-by-side, exactly as one cross-sectional wall (the
+  //    highlighted block) is built, floor-to-ceiling, wall-to-wall ──
+  const diagW = CW;
+  const diagH = PH - y - 16; // fill remaining page height since this is the only content
+  const pad   = 6;
+
+  doc.setFillColor(238,236,230);
+  doc.setDrawColor(...C.border); doc.setLineWidth(0.4);
+  doc.rect(ML, y, diagW, diagH, 'FD');
+
+  const cH = spec.height, cWid = spec.width;
+  const innerW = diagW - pad*2;
+  const innerH = diagH - pad*2;
+  const sx = innerW / cWid;   // Z → horizontal
+  const sy = innerH / cH;     // Y → vertical (inverted: floor at bottom)
+
+  const floorY = y + diagH - pad; // page-Y of the container floor
+
+  const sorted = [...items].sort((a,b)=>(a.cartonNumber||0)-(b.cartonNumber||0));
+  for (const p of sorted) {
+    const rx = ML + pad + p.z * sx;
+    const rh = Math.max(p.h * sy, 4);
+    const ry = floorY - (p.y + p.h) * sy;          // top edge of the box
+    const rw = Math.max(p.w * sx, 4);
+    const rgb = hexToRgb(p.color || '#D9A66C');
+
+    // Box body
+    doc.setFillColor(...rgb);
+    doc.setDrawColor(255,255,255); doc.setLineWidth(0.6);
+    doc.rect(rx, ry, rw, rh, 'FD');
+    doc.setDrawColor(0,0,0); doc.setLineWidth(0.2);
+    doc.rect(rx, ry, rw, rh);
+
+    // Carton number, centred
+    const fs = Math.max(Math.min(rw*0.22, rh*0.3, 11), 4);
+    doc.setFontSize(fs); doc.setFont('helvetica','bold');
+    doc.setTextColor(255,255,255);
+    doc.text(`#${p.cartonNumber||''}`, rx+rw/2, ry+rh/2+fs*0.1, {align:'center'});
+
+    // SKU + size below number if there's room
+    if (rh > 14 && rw > 12) {
+      doc.setFontSize(Math.max(fs*0.5, 3.4));
+      doc.setFont('helvetica','normal');
+      const sk = (p.sku||'').length>9 ? p.sku.substring(0,8)+'\u2026' : p.sku;
+      doc.text(sk, rx+rw/2, ry+rh/2+fs*0.1+fs*0.82, {align:'center'});
+      doc.setFontSize(Math.max(fs*0.42, 3));
+      doc.text(`${Math.round(p.weight)} kg`, rx+rw/2, ry+rh/2+fs*0.1+fs*1.5, {align:'center'});
+    }
+  }
+
+  // Ground line
+  doc.setDrawColor(...C.text); doc.setLineWidth(0.6);
+  doc.line(ML+pad, floorY, ML+pad+innerW, floorY);
+
+  // Axis labels — darker, higher-contrast against the diagram background
+  doc.setFontSize(6.5); doc.setFont('helvetica','bold'); doc.setTextColor(...C.text);
+  doc.text('\u25c4 LEFT WALL', ML+pad+1, y+diagH-1.5);
+  doc.text('RIGHT WALL \u25ba', ML+pad+innerW-23, y+diagH-1.5);
+
+  // Scale bar
+  const barMm = 500, barPx = barMm*sx;
+  const bx = ML+pad+4, by = floorY-4;
+  doc.setDrawColor(...C.text); doc.setLineWidth(0.4);
+  doc.line(bx, by, bx+barPx, by);
+  doc.line(bx, by-1.5, bx, by+1.5);
+  doc.line(bx+barPx, by-1.5, bx+barPx, by+1.5);
+  doc.setFontSize(5.5); doc.setFont('helvetica','bold'); doc.setTextColor(...C.text);
+  doc.text('500 mm', bx+barPx/2, by-2, {align:'center'});
+}
+
+window.FCOS_REPORT = { generateReport };
+})();
